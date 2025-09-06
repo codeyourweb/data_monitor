@@ -1,0 +1,11 @@
+datamonitor_log_level: "LOGLEVEL_INFO"
+datamonitor_log_file: "C:\\Windows\\Temp\\datamonitor.log"
+datamonitor_hooked_functions: "GetClipboardData|SetClipboardData|MoveFileExW|CopyFile2"
+datamonitor_redacted_text_clipboard: true
+datamonitor_http_forward_events:
+    enabled: true
+    url: "https://your-url-here"
+    data_batch_send_interval: 5
+    headers:
+        Authorization: "Bearer <Your API token here>"
+        X-CUSTOM-HEADER: "Custom-value"

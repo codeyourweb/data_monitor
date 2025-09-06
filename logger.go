@@ -36,7 +36,6 @@ func InitLogger(level int) {
 }
 
 func SetLogToFile(filePath string) {
-
 	if logFile != nil {
 		logFile.Close()
 	}
