@@ -16,28 +16,41 @@ import (
 /*
 #include <windows.h>
 #include <winbase.h>
+#include <wingdi.h>
+#include <winuser.h>
 
 typedef HANDLE (WINAPI *GETCLIPBOARDDATA)(UINT);
 typedef HANDLE (WINAPI *SETCLIPBOARDDATA)(UINT, HANDLE);
 typedef HRESULT (WINAPI *COPYFILE2)(PCWSTR, PCWSTR, COPYFILE2_EXTENDED_PARAMETERS);
 typedef BOOL (WINAPI *MOVEFILEEXW)(LPCWSTR, LPCWSTR, DWORD);
+typedef BOOL (WINAPI *BITBLT)(HDC, int, int, int, int, HDC, int, int, DWORD);
+typedef BOOL (WINAPI *PRINTWINDOW)(HWND, HDC, UINT);
 */
 import "C"
 
 // Define types for C functions
-type UINT uint32
-type WCHAR uint16
-type HRESULT uint32
-type HANDLE C.HANDLE
-type BOOL uint32
-type DWORD uint32
-type LPCWSTR *uint16
-type PCWSTR *uint16
-type COPYFILE2_EXTENDED_PARAMETERS *C.COPYFILE2_EXTENDED_PARAMETERS
+type (
+	UINT                          uint32
+	WCHAR                         uint16
+	HRESULT                       uint32
+	HANDLE                        C.HANDLE
+	HDC                           uintptr
+	HWND                          uintptr
+	BOOL                          uint32
+	DWORD                         uint32
+	LPCWSTR                       *uint16
+	PCWSTR                        *uint16
+	COPYFILE2_EXTENDED_PARAMETERS *C.COPYFILE2_EXTENDED_PARAMETERS
+)
 
 // Clipboard formats constants
 const (
 	CF_TEXT           = 1
+	CF_BITMAP         = 2
+	CF_DIB            = 8
+	CF_DIBV5          = 17
+	CF_BITMAPV5HEADER = 24
+	CF_DSPBITMAP      = 82
 	CF_UNICODETEXT    = 13
 	CF_HDROP          = 15
 	CF_DATAOBJECT     = 49161
@@ -48,6 +61,7 @@ const (
 const (
 	CURRENT_ACTIVE_WINDOW_MONITOR_THRESHOLD = 200 * time.Millisecond
 	CLIPBOARD_MONITOR_THRESHOLD             = 200 * time.Millisecond
+	PRINTSCREEN_MONITOR_THRESHOLD           = 5 * time.Second
 )
 
 // default parameters for the Data Monitor
@@ -63,6 +77,7 @@ var (
 	lastClipboardOwnerTime   time.Time
 	lastGetClipboardDataTime time.Time
 	lastSetClipboardDataTime time.Time
+	lastPrintScreenTime      time.Time
 
 	lastClipboardOwnerHwnd    string
 	lastForegroundWindowTitle string
@@ -149,6 +164,26 @@ func DataMonitor(argsPtr unsafe.Pointer) {
 		return
 	}
 	defer gominhook.Uninitialize()
+
+	if strings.Contains(HOOKED_FUNCTIONS, "BitBlt") {
+		err = gominhook.CreateHook(procBitBlt.Addr(), syscall.NewCallback(BitBltOverride), uintptr(unsafe.Pointer(&fpBitBlt)))
+		if err != nil {
+			logMessage(LOGLEVEL_ERROR, fmt.Sprintf("Failing create hook for gdi32:BitBlt() : %v", err))
+			return
+		} else {
+			logMessage(LOGLEVEL_DEBUG, "Hooking BitBlt API")
+		}
+	}
+
+	if strings.Contains(HOOKED_FUNCTIONS, "PrintWindow") {
+		err = gominhook.CreateHook(procPrintWindow.Addr(), syscall.NewCallback(PrintWindowOverride), uintptr(unsafe.Pointer(&fpPrintWindow)))
+		if err != nil {
+			logMessage(LOGLEVEL_ERROR, fmt.Sprintf("Failing create hook for user32:PrintWindow() : %v", err))
+			return
+		} else {
+			logMessage(LOGLEVEL_DEBUG, "Hooking PrintWindow API")
+		}
+	}
 
 	if strings.Contains(HOOKED_FUNCTIONS, "GetClipboardData") {
 		err = gominhook.CreateHook(procGetClipboardData.Addr(), syscall.NewCallback(GetClipboardDataOverride), uintptr(unsafe.Pointer(&fpGetClipboardData)))

@@ -15,11 +15,15 @@ import (
 /*
 #include <windows.h>
 #include <winbase.h>
+#include <wingdi.h>
+#include <winuser.h>
 
 typedef HANDLE (WINAPI *GETCLIPBOARDDATA)(UINT);
 typedef HANDLE (WINAPI *SETCLIPBOARDDATA)(UINT, HANDLE);
 typedef HRESULT (WINAPI *COPYFILE2)(PCWSTR, PCWSTR, COPYFILE2_EXTENDED_PARAMETERS);
 typedef BOOL (WINAPI *MOVEFILEEXW)(LPCWSTR, LPCWSTR, DWORD);
+typedef BOOL (WINAPI *BITBLT)(HDC, int, int, int, int, HDC, int, int, DWORD);
+typedef BOOL (WINAPI *PRINTWINDOW)(HWND, HDC, UINT);
 */
 import "C"
 
@@ -29,23 +33,28 @@ var (
 	kernel32   = syscall.MustLoadDLL("kernel32.dll")
 	kernelbase = syscall.MustLoadDLL("kernelbase.dll")
 	shell32    = syscall.MustLoadDLL("shell32.dll")
+	gdi32      = syscall.MustLoadDLL("gdi32.dll")
 
 	procGetClipboardData    = user32.MustFindProc("GetClipboardData")
 	procSetClipboardData    = user32.MustFindProc("SetClipboardData")
 	procGetClipboardOwner   = user32.MustFindProc("GetClipboardOwner")
 	procGetForegroundWindow = user32.MustFindProc("GetForegroundWindow")
 	procGetWindowTextW      = user32.MustFindProc("GetWindowTextW")
+	procPrintWindow         = user32.MustFindProc("PrintWindow")
 	procGlobalLock          = kernel32.MustFindProc("GlobalLock")
 	procGlobalUnlock        = kernel32.MustFindProc("GlobalUnlock")
 	procGlobalSize          = kernel32.MustFindProc("GlobalSize")
 	procMoveFileExW         = kernel32.MustFindProc("MoveFileExW")
 	procCopyFile2           = kernelbase.MustFindProc("CopyFile2")
 	procDragQueryFile       = shell32.MustFindProc("DragQueryFileW")
+	procBitBlt              = gdi32.MustFindProc("BitBlt")
 
 	fpGetClipboardData C.GETCLIPBOARDDATA
 	fpSetClipboardData C.SETCLIPBOARDDATA
 	fpCopyFile2        C.COPYFILE2
 	fpMoveFileExW      C.MOVEFILEEXW
+	fpBitBlt           C.BITBLT
+	fpPrintWindow      C.PRINTWINDOW
 )
 
 //export GetClipboardDataOverride
@@ -157,6 +166,10 @@ func GetClipboardDataOverride(uFormat UINT) uintptr {
 			}
 		}
 
+	case uintptr(CF_BITMAP), uintptr(CF_DIB), uintptr(CF_DIBV5), uintptr(CF_BITMAPV5HEADER), uintptr(CF_DSPBITMAP):
+		logMessage(LOGLEVEL_INFO, fmt.Sprintf("Format: CF_BITMAP(%d) - Owner Window: %s", uFormat, lastForegroundWindowTitle))
+		addNewPacketToQueue("Telemetry", "Clipboard", "GetClipboardData", "Bitmap image data paste", fmt.Sprintf("Owner Window: %s", lastForegroundWindowTitle))
+
 	case uintptr(CF_OLEPRIVATEDATA):
 		// CF_OLEPRIVATEDATA intentionally left blank - generally handled in CF_DATAOBJECT
 	case uintptr(CF_HDROP):
@@ -262,5 +275,54 @@ func CopyFile2Override(lpExistingFileName PCWSTR, lpNewFileName PCWSTR, pExtende
 		addNewPacketToQueue("Telemetry", "FileTransfer", "CopyFile2", sourcePath, destinationPath)
 	}
 
+	return ret
+}
+
+//export PrintWindowOverride
+func PrintWindowOverride(hwnd HWND, hdcBlt HDC, nFlags UINT) uintptr {
+	ret, _, err := syscall.SyscallN(
+		uintptr(unsafe.Pointer(procPrintWindow)),
+		uintptr(unsafe.Pointer(hwnd)),
+		uintptr(unsafe.Pointer(hdcBlt)),
+		uintptr(nFlags),
+	)
+
+	if err != 0 {
+		logMessage(LOGLEVEL_ERROR, fmt.Sprintf("PrintWindow error: %v", err))
+	} else {
+		if time.Since(lastPrintScreenTime) > PRINTSCREEN_MONITOR_THRESHOLD {
+			lastPrintScreenTime = time.Now()
+			logMessage(LOGLEVEL_INFO, fmt.Sprintf("print screen (PrintWindow) succeeded"))
+			addNewPacketToQueue("Telemetry", "PrintScreen", "PrintWindow", fmt.Sprintf("%s - PrintScreen", lastForegroundWindowTitle), "")
+		}
+	}
+
+	return ret
+}
+
+//export BitBltOverride
+func BitBltOverride(hdcDest HDC, nXDest int32, nYDest int32, nWidth int32, nHeight int32, hdcSrc HDC, nXSrc int32, nYSrc int32, dwRop DWORD) uintptr {
+	ret, _, err := syscall.SyscallN(
+		uintptr(unsafe.Pointer(fpBitBlt)),
+		uintptr(unsafe.Pointer(hdcDest)),
+		uintptr(nXDest),
+		uintptr(nYDest),
+		uintptr(nWidth),
+		uintptr(nHeight),
+		uintptr(unsafe.Pointer(hdcSrc)),
+		uintptr(nXSrc),
+		uintptr(nYSrc),
+		uintptr(dwRop),
+	)
+
+	if err != 0 {
+		logMessage(LOGLEVEL_ERROR, fmt.Sprintf("BitBlt error: %v", err))
+	} else {
+		if time.Since(lastPrintScreenTime) > PRINTSCREEN_MONITOR_THRESHOLD {
+			lastPrintScreenTime = time.Now()
+			logMessage(LOGLEVEL_INFO, fmt.Sprintf("print screen (BitBlt) succeeded"))
+			addNewPacketToQueue("Telemetry", "PrintScreen", "BitBlt", fmt.Sprintf("%s - PrintScreen", lastForegroundWindowTitle), "")
+		}
+	}
 	return ret
 }
